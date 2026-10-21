@@ -1,0 +1,4 @@
+spec:
+  dashboardConfig:
+    modelAsService: true
+    genAiStudio: true

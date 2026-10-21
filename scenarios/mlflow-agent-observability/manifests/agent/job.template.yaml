@@ -1,0 +1,104 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: maas-mlflow-agent-demo
+objects:
+  - apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: ${JOB_NAME}
+      namespace: agent-demo
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: ${{TIMEOUT_SECONDS}}
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app: maas-mlflow-agent-demo
+        spec:
+          restartPolicy: Never
+          serviceAccountName: maas-mlflow-agent-demo
+          securityContext:
+            runAsNonRoot: true
+            hostUsers: false
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: agent-demo
+              image: registry.access.redhat.com/ubi9/python-312:latest
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  python -m pip install --no-cache-dir --target /tmp/site-packages \
+                    'mlflow-skinny[kubernetes]==3.14.0' 'httpx==0.28.1'
+                  cat \
+                    /etc/pki/tls/certs/ca-bundle.crt \
+                    /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt \
+                    /etc/pki/tls/certs/router-ca/ca-bundle.crt \
+                    > /tmp/ca-bundle.crt
+                  export PYTHONPATH=/tmp/site-packages
+                  export REQUESTS_CA_BUNDLE=/tmp/ca-bundle.crt
+                  export SSL_CERT_FILE=/tmp/ca-bundle.crt
+                  python /opt/agent-demo/run_demo.py
+              env:
+                - name: PYTHONUNBUFFERED
+                  value: "1"
+                - name: MAAS_BASE_URL
+                  value: ${MAAS_BASE_URL}
+                - name: MAAS_MODEL_ID
+                  value: ${MAAS_MODEL_ID}
+                - name: MAAS_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: maas-agent-demo-key
+                      key: maas-api-key
+                - name: MLFLOW_TRACKING_URI
+                  value: https://mlflow.redhat-ods-applications.svc:8443/mlflow
+                - name: MLFLOW_TRACKING_AUTH
+                  value: kubernetes-namespaced
+                - name: MLFLOW_WORKSPACE
+                  value: agent-demo
+                - name: MLFLOW_EXPERIMENT
+                  value: maas-agent-observability
+                - name: AGENT_DEMO_RATE_LIMIT_REQUESTS
+                  value: "${RATE_LIMIT_REQUESTS}"
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 512Mi
+                limits:
+                  cpu: "1"
+                  memory: 1Gi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: agent-demo
+                  mountPath: /opt/agent-demo
+                  readOnly: true
+                - name: router-ca
+                  mountPath: /etc/pki/tls/certs/router-ca
+                  readOnly: true
+          volumes:
+            - name: agent-demo
+              configMap:
+                name: maas-mlflow-agent-demo
+            - name: router-ca
+              configMap:
+                name: maas-agent-router-ca
+parameters:
+  - name: JOB_NAME
+    required: true
+  - name: MAAS_BASE_URL
+    required: true
+  - name: MAAS_MODEL_ID
+    required: true
+  - name: RATE_LIMIT_REQUESTS
+    value: "12"
+  - name: TIMEOUT_SECONDS
+    value: "900"
